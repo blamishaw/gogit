@@ -1,6 +1,10 @@
 build:
 	go build .
 
+install:
+	go build . && chmod +x gogit
+	sudo cp gogit /usr/local/bin
+
 test:
 	mkdir /tmp/gogit_test ; go test ./... ; rm -rf /tmp/gogit_test
 
