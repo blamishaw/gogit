@@ -17,7 +17,7 @@ const TEST_DIR = "/tmp/gogit_test"
 // ** Test Helpers **
 func expect[T comparable](t *testing.T, ctx context.Context, received, target T) {
 	if target != received {
-		t.Errorf("%s: expected: %v, recieved: %v", ctx.Value("name"), target, received)
+		t.Errorf("%s:\nexpected: \"%v\"\nrecieved: \"%v\"", ctx.Value("name"), target, received)
 	}
 }
 
@@ -39,7 +39,7 @@ func expectDirLength(t *testing.T, ctx context.Context, dirPath string, length i
 		t.Errorf("%s: %s", ctx.Value("name"), err)
 	}
 	if len(files) != length {
-		t.Errorf("%s: expected %d files and received %d", ctx.Value("name"), length, len(files))
+		t.Errorf("%s:\nexpected %d file(s)\nreceived %d file(s)", ctx.Value("name"), length, len(files))
 	}
 }
 
@@ -58,6 +58,8 @@ func expectOutput(t *testing.T, ctx context.Context, fn func(), expected string)
 
 // ** Setup/Teardown Helpers **
 func setupInit() error {
+	COMPRESS_OBJECTS = false
+
 	initDirs := []string{
 		filepath.Join(TEST_DIR, GOGIT_DIR, "objects"),
 		filepath.Join(TEST_DIR, GOGIT_DIR, "refs", "heads"),
@@ -188,6 +190,7 @@ func Test_CLI(t *testing.T) {
 				err := cli.Init(args, flags)
 				if err != nil {
 					t.Error(err)
+					t.FailNow()
 				}
 				expectExists(t, ctx, GOGIT_DIR, true)
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, "objects"), true)
@@ -210,6 +213,7 @@ func Test_CLI(t *testing.T) {
 				err := cli.Checkout(args, flags)
 				if err != nil {
 					t.Error(err)
+					t.FailNow()
 				}
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, HEAD), true)
 				expect(t, ctx, inspectRef(HEAD), "ref: refs/heads/new-branch")
@@ -224,13 +228,14 @@ func Test_CLI(t *testing.T) {
 				setupBranch("existing-branch")
 			},
 			TearDown: func() {
-				teardownRemoveRoot()
+				// teardownRemoveRoot()
 			},
 			Run: func(args CLIArgs, flags CLIFlags) {
 				ctx := context.WithValue(context.Background(), "name", "Checkout - Existing Branch")
 				err := cli.Checkout(args, flags)
 				if err != nil {
 					t.Error(err)
+					t.FailNow()
 				}
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, HEAD), true)
 				expect(t, ctx, inspectRef(HEAD), "ref: refs/heads/existing-branch")
@@ -252,6 +257,7 @@ func Test_CLI(t *testing.T) {
 				err := cli.Tag(args, flags)
 				if err != nil {
 					t.Error(err)
+					t.FailNow()
 				}
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, "refs", "tags"), true)
 				expect(t, ctx, inspectRef("refs/tags/new-tag"), "commit-sha-123")
@@ -291,6 +297,7 @@ func Test_CLI(t *testing.T) {
 				err := cli.Branch(args, flags)
 				if err != nil {
 					t.Error(err)
+					t.FailNow()
 				}
 				expect(t, ctx, inspectRef(HEAD), "ref: refs/heads/main")
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, "refs", "heads", "new-branch"), true)
@@ -313,6 +320,7 @@ func Test_CLI(t *testing.T) {
 				err := cli.Add(args, flags)
 				if err != nil {
 					t.Error(err)
+					t.FailNow()
 				}
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, "index"), true)
 				expect(t, ctx, inspectIndex()["test.txt"], getOid([]byte("Hello World!"), BLOB))
@@ -338,6 +346,7 @@ func Test_CLI(t *testing.T) {
 				err := cli.Add(args, flags)
 				if err != nil {
 					t.Error(err)
+					t.FailNow()
 				}
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, "index"), true)
 				expect(t, ctx, len(inspectIndex()), 5)
@@ -359,6 +368,7 @@ func Test_CLI(t *testing.T) {
 				err := cli.Commit(args, flags)
 				if err != nil {
 					t.Error(err)
+					t.FailNow()
 				}
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, HEAD), true)
 				expect(t, ctx, inspectRef(HEAD), "ref: refs/heads/main")

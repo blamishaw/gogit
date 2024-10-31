@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"compress/zlib"
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"iter"
 	"os"
@@ -15,6 +17,9 @@ import (
 
 // FP: File permission
 const FP = 0777
+
+// Var so can be overriden in tests
+var COMPRESS_OBJECTS = true
 
 type Data struct{}
 
@@ -157,7 +162,17 @@ func (Data) HashObject(data []byte, _type string) (string, error) {
 		return oid, nil
 	}
 
-	if err := os.WriteFile(fp, buf, FP); err != nil {
+	// Zlib compress buffer
+	var b bytes.Buffer
+	if COMPRESS_OBJECTS {
+		w := zlib.NewWriter(&b)
+		w.Write(buf)
+		w.Close()
+	} else {
+		b = *bytes.NewBuffer(buf)
+	}
+
+	if err := os.WriteFile(fp, b.Bytes(), FP); err != nil {
 		return "", err
 	}
 	return oid, nil
@@ -165,11 +180,26 @@ func (Data) HashObject(data []byte, _type string) (string, error) {
 
 // Should we just read the type if the target type isn't provided?
 func (Data) GetObject(oid, targetType string) ([]byte, error) {
-	buf, err := os.ReadFile(filepath.Join(GOGIT_ROOT, "objects", oid))
+	data, err := os.ReadFile(filepath.Join(GOGIT_ROOT, "objects", oid))
 	if err != nil {
 		return []byte{}, err
 	}
 
+	// Zlib uncompress buffer
+	var b bytes.Buffer
+	if COMPRESS_OBJECTS {
+		compressedBuf := bytes.NewBuffer(data)
+		r, err := zlib.NewReader(compressedBuf)
+		if err != nil {
+			return []byte{}, err
+		}
+		io.Copy(&b, r)
+		r.Close()
+	} else {
+		b = *bytes.NewBuffer(data)
+	}
+
+	buf := b.Bytes()
 	typeIdx := bytes.IndexByte(buf, 0)
 	if t := string(buf[:typeIdx]); targetType != t {
 		return []byte{}, fmt.Errorf("type %s is not of target type %s", t, targetType)
