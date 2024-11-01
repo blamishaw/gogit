@@ -216,6 +216,10 @@ func (Data) GetObject(oid, targetType string) ([]byte, error) {
 	return buf[typeIdx+1:], nil
 }
 
+func (Data) DeleteObject(oid string) error {
+	return os.Remove(filepath.Join(GOGIT_DIR, "objects", oid))
+}
+
 func (Data) DeleteRef(name string, deref bool) error {
 	name, _, err := data.getRefInternal(name, deref)
 	if err != nil {

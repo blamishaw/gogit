@@ -30,7 +30,7 @@ func expectEquals[T comparable](t *testing.T, ctx context.Context, received, tar
 
 func expectNotEquals[T comparable](t *testing.T, ctx context.Context, received, target T) {
 	if target == received {
-		cleanup(t, fmt.Errorf("%s:\nexpected: \"%v\"\nreceived: \"%v\"", ctx.Value(TestName), target, received))
+		cleanup(t, fmt.Errorf("%s:\nreceived: \"%v\"\nshould not equal: \"%v\"", ctx.Value(TestName), received, target))
 	}
 }
 
@@ -540,6 +540,43 @@ func Test_CLI(t *testing.T) {
 				commit, _ = base.GetCommit(currRef)
 				currRef = commit.ParentOids[0]
 				expectEquals(t, ctx, currRef, "main-commit-1")
+			},
+		},
+		{
+			Name:  "GC",
+			Args:  CLIArgs{},
+			Flags: CLIFlags{},
+			Setup: func() {
+				setupInit()
+
+				setupCommit("new-branch-1", "new-branch-1-commit-1", "", map[string][]byte{
+					"test-branch-1.txt": []byte("Hello World 1!"),
+				})
+
+				setupCommit("new-branch-2", "new-branch-2-commit-1", "", map[string][]byte{
+					"test-branch-2.txt": []byte("Hello World 2!"),
+				})
+
+				// Remove new-branch ref (commit, tree, and blob are now unreachable)
+				err := os.Remove(filepath.Join(GOGIT_DIR, "refs", "heads", "new-branch-1"))
+				if err != nil {
+					cleanup(t, err)
+				}
+			},
+			Cleanup: func() {
+				cleanup(t, nil)
+			},
+			Run: func(args CLIArgs, flags CLIFlags) {
+				ctx := context.WithValue(context.Background(), TestName, "GC")
+				if err := cli.GC(args, flags); err != nil {
+					cleanup(t, err)
+				}
+
+				// commit, tree, and test.txt blob from new-branch-2 should not be deleted
+				expectDirLength(t, ctx, filepath.Join(GOGIT_DIR, "objects"), 3)
+				oid := inspectRef("refs/heads/new-branch-2")
+				expectNotEquals(t, ctx, oid, "")
+				expectExists(t, ctx, filepath.Join(GOGIT_DIR, "objects", oid), true)
 			},
 		},
 	}
