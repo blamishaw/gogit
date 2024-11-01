@@ -7,16 +7,20 @@ on:
     branches: ["main"]
 
 jobs:
-  lint:
+  golangci:
+    name: lint
     runs-on: ubuntu-latest
-
     steps:
-      - name: Golangci-lint
-        uses: golangci/golangci-lint-action@v6.1.1
-
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.60
   test:
     runs-on: ubuntu-latest
-
     steps:
       - name: checkout repo
         uses: actions/checkout@main
