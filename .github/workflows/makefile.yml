@@ -13,5 +13,7 @@ jobs:
     steps:
       - name: checkout repo
         uses: actions/checkout@main
+      - name: Golangci-lint
+        uses: golangci/golangci-lint-action@v6.1.1
       - name: test
         run: make test
