@@ -67,7 +67,11 @@ func (Base) iterCommitsAndParents(oids []string) iter.Seq[string] {
 				return
 			}
 
-			c, _ := base.GetCommit(oid)
+			c, err := base.GetCommit(oid)
+			if err != nil {
+				panic(err)
+			}
+
 			if len(c.ParentOids) > 0 {
 				// Return first parent next
 				oids = append(c.ParentOids[:1], oids...)
@@ -194,9 +198,13 @@ func (Base) checkoutIndex(index map[string]string) error {
 	}
 
 	for path, oid := range index {
-		if err := os.Mkdir(filepath.Dir(path), FP); err != nil && !os.IsExist(err) {
+		if err := os.MkdirAll(filepath.Dir(path), FP); err != nil && !os.IsExist(err) {
 			return err
 		}
+		if oid == "" {
+			return fmt.Errorf("empty oid: %v", index)
+		}
+
 		obj, err := data.GetObject(oid, BLOB)
 		if err != nil {
 			return err
@@ -293,8 +301,8 @@ func (Base) Init() error {
 }
 
 func (Base) ReadTree(treeOid string, updateWorkingDir bool) error {
-	return data.WithIndex(func(index map[string]string) error {
-		index = map[string]string{}
+	return data.WithIndex(func(_ map[string]string) error {
+		index := map[string]string{}
 		for path, oid := range base.GetTree(treeOid, ".") {
 			index[path] = oid
 		}
@@ -399,10 +407,7 @@ func (Base) ReadTreeMerged(
 			return err
 		}
 
-		index = map[string]string{}
-		for path, blob := range mergedTree {
-			index[path] = blob
-		}
+		index = mergedTree
 
 		if !updateWorkingDir {
 			return nil
