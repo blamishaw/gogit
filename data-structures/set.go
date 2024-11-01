@@ -9,12 +9,6 @@ type Set[T comparable] struct {
 	elems map[T]bool
 }
 
-func copySet[T comparable](src *Set[T], dest *Set[T]) {
-	for key := range src.elems {
-		dest.Add(key)
-	}
-}
-
 func NewSet[T comparable](items []T) Set[T] {
 	m := make(map[T]bool)
 	for _, item := range items {

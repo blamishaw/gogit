@@ -143,7 +143,10 @@ func (Base) mapObjectsInTree(treeOID string, visited *ds.Set[string], mapFn func
 		}
 
 		if node.Type == TREE {
-			base.mapObjectsInTree(node.Oid, visited, mapFn)
+			err := base.mapObjectsInTree(node.Oid, visited, mapFn)
+			if err != nil {
+				return err
+			}
 		} else {
 			visited.Add(node.Oid)
 			err := mapFn(node.Oid)
@@ -301,18 +304,19 @@ func (Base) Init() error {
 }
 
 func (Base) ReadTree(treeOid string, updateWorkingDir bool) error {
-	return data.WithIndex(func(_ map[string]string) error {
-		index := map[string]string{}
-		for path, oid := range base.GetTree(treeOid, ".") {
-			index[path] = oid
-		}
+	return data.WithIndex(
+		func(_ map[string]string) (map[string]string, error) {
+			index := map[string]string{}
+			for path, oid := range base.GetTree(treeOid, ".") {
+				index[path] = oid
+			}
 
-		if !updateWorkingDir {
-			return nil
-		}
+			if !updateWorkingDir {
+				return index, nil
+			}
 
-		return base.checkoutIndex(index)
-	})
+			return index, base.checkoutIndex(index)
+		})
 }
 
 func (Base) WriteTree(dir string) (string, error) {
@@ -365,10 +369,11 @@ func (Base) GetTree(oid, basePath string) Tree {
 
 func (Base) GetIndexTree() (Tree, error) {
 	var indexTree Tree
-	err := data.WithIndex(func(index map[string]string) error {
-		indexTree = index
-		return nil
-	})
+	err := data.WithIndex(
+		func(index map[string]string) (map[string]string, error) {
+			indexTree = index
+			return indexTree, nil
+		})
 	return indexTree, err
 }
 
@@ -401,19 +406,18 @@ func (Base) ReadTreeMerged(
 	mergeTreeOid string,
 	updateWorkingDir bool,
 ) error {
-	return data.WithIndex(func(index map[string]string) error {
-		mergedTree, err := diff.MergeTrees(base.GetTree(baseTreeOid, ""), base.GetTree(headTreeOid, ""), base.GetTree(mergeTreeOid, ""))
-		if err != nil {
-			return err
-		}
+	return data.WithIndex(
+		func(index map[string]string) (map[string]string, error) {
+			mergedTree, err := diff.MergeTrees(base.GetTree(baseTreeOid, ""), base.GetTree(headTreeOid, ""), base.GetTree(mergeTreeOid, ""))
+			if err != nil {
+				return nil, err
+			}
 
-		index = mergedTree
-
-		if !updateWorkingDir {
-			return nil
-		}
-		return base.checkoutIndex(index)
-	})
+			if !updateWorkingDir {
+				return mergedTree, nil
+			}
+			return mergedTree, base.checkoutIndex(mergedTree)
+		})
 }
 
 func (Base) Commit(message string, timestamp time.Time) (string, error) {
@@ -550,8 +554,7 @@ func (Base) Merge(oid string) error {
 		if err != nil {
 			return err
 		}
-		data.UpdateRef(HEAD, &RefValue{false, oid}, true)
-		return nil
+		return data.UpdateRef(HEAD, &RefValue{false, oid}, true)
 	}
 
 	headCommit, err := base.GetCommit(headRef.Value)
@@ -658,24 +661,25 @@ func (Base) Add(filenames ...string) error {
 		})
 	}
 
-	return data.WithIndex(func(index map[string]string) error {
-		for _, filename := range filenames {
-			if info, err := os.Stat(filename); err == nil {
-				if info.IsDir() {
-					if err = addDir(filename, index); err != nil {
-						return err
+	return data.WithIndex(
+		func(index map[string]string) (map[string]string, error) {
+			for _, filename := range filenames {
+				if info, err := os.Stat(filename); err == nil {
+					if info.IsDir() {
+						if err = addDir(filename, index); err != nil {
+							return nil, err
+						}
+					} else {
+						if err = addFile(filename, index); err != nil {
+							return nil, err
+						}
 					}
 				} else {
-					if err = addFile(filename, index); err != nil {
-						return err
-					}
+					return nil, err
 				}
-			} else {
-				return err
 			}
-		}
-		return nil
-	})
+			return index, nil
+		})
 }
 
 func (Base) getRebaseCommits(oid1, oid2 string) []string {

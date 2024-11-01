@@ -71,7 +71,7 @@ func (Data) iterRefs(prefix string, deref bool) iter.Seq2[string, *RefValue] {
 	return func(yield func(string, *RefValue) bool) {
 		refNames := []string{HEAD, MERGE_HEAD}
 		refDir := filepath.Join("refs", prefix)
-		filepath.WalkDir(filepath.Join(GOGIT_ROOT, refDir), func(path string, d fs.DirEntry, err error) error {
+		err := filepath.WalkDir(filepath.Join(GOGIT_ROOT, refDir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -82,6 +82,10 @@ func (Data) iterRefs(prefix string, deref bool) iter.Seq2[string, *RefValue] {
 			}
 			return nil
 		})
+
+		if err != nil {
+			panic(err)
+		}
 
 		for _, refName := range refNames {
 			if !strings.HasPrefix(refName, refDir) {
@@ -118,14 +122,17 @@ func (Data) Init() error {
 }
 
 // ChangeRootDir updates the gogit root directory, executes fn, and restores the gogit root
-func (Data) ChangeRootDir(newDir string, fn func()) {
+func (Data) ChangeRootDir(newDir string, fn func() error) error {
 	prev := GOGIT_ROOT
 	GOGIT_ROOT = newDir
-	fn()
+	err := fn()
 	GOGIT_ROOT = prev
+	return err
 }
 
-func (Data) WithIndex(fn func(index map[string]string) error) error {
+func (Data) WithIndex(
+	fn func(index map[string]string) (map[string]string, error),
+) error {
 	index := make(map[string]string)
 
 	data, err := os.ReadFile(GOGIT_INDEX)
@@ -137,11 +144,12 @@ func (Data) WithIndex(fn func(index map[string]string) error) error {
 		return err
 	}
 
-	if err = fn(index); err != nil {
+	newIndex, err := fn(index)
+	if err != nil {
 		return err
 	}
 
-	jsonData, err := json.Marshal(index)
+	jsonData, err := json.Marshal(newIndex)
 	if err != nil {
 		return err
 	}
@@ -167,7 +175,7 @@ func (Data) HashObject(data []byte, _type string) (string, error) {
 	var b bytes.Buffer
 	if COMPRESS_OBJECTS {
 		w := zlib.NewWriter(&b)
-		w.Write(buf)
+		_, _ = w.Write(buf)
 		w.Close()
 	} else {
 		b = *bytes.NewBuffer(buf)
@@ -194,7 +202,7 @@ func (Data) GetObject(oid, targetType string) ([]byte, error) {
 		if err != nil {
 			return []byte{}, err
 		}
-		io.Copy(&b, r)
+		_, _ = io.Copy(&b, r)
 		r.Close()
 	} else {
 		b = *bytes.NewBuffer(data)

@@ -18,7 +18,11 @@ func (Remote) Push(remotePath, refName string) error {
 		refName = "refs/heads/" + refName
 	}
 
-	remoteRefs := remote.getRemoteRefs(remotePath, "")
+	remoteRefs, err := remote.getRemoteRefs(remotePath, "")
+	if err != nil {
+		return err
+	}
+
 	localRef, err := data.GetRef(refName, true)
 	if err != nil {
 		return err
@@ -69,25 +73,25 @@ func (Remote) Push(remotePath, refName string) error {
 		return err
 	}
 
-	data.ChangeRootDir(remotePath, func() {
-		data.UpdateRef(refName, &RefValue{false, localRef.Value}, true)
+	return data.ChangeRootDir(remotePath, func() error {
+		return data.UpdateRef(refName, &RefValue{false, localRef.Value}, true)
 	})
-
-	return nil
 }
 
 func (Remote) Fetch(remotePath string) error {
-	remoteRefs := remote.getRemoteRefs(remotePath, "heads")
+	remoteRefs, err := remote.getRemoteRefs(remotePath, "heads")
+	if err != nil {
+		return err
+	}
 	remoteOIDs := []string{}
 	for _, refValue := range remoteRefs {
 		remoteOIDs = append(remoteOIDs, refValue)
 	}
 
-	err := base.MapObjectsInCommits(
+	err = base.MapObjectsInCommits(
 		remoteOIDs,
 		func(oid string) error {
-			data.fetchRemoteObject(oid, remotePath)
-			return nil
+			return data.fetchRemoteObject(oid, remotePath)
 		},
 	)
 	if err != nil {
@@ -111,12 +115,13 @@ func (Remote) Fetch(remotePath string) error {
 	return nil
 }
 
-func (Remote) getRemoteRefs(remotePath, prefix string) map[string]string {
+func (Remote) getRemoteRefs(remotePath, prefix string) (map[string]string, error) {
 	refMap := make(map[string]string)
-	data.ChangeRootDir(remotePath, func() {
+	err := data.ChangeRootDir(remotePath, func() error {
 		for refName, ref := range data.iterRefs(prefix, true) {
 			refMap[refName] = ref.Value
 		}
+		return nil
 	})
-	return refMap
+	return refMap, err
 }
