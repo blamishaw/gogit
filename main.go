@@ -367,6 +367,15 @@ func (CLI) ReadIndex(_ CLIArgs, _ CLIFlags) error {
 	return nil
 }
 
+func (CLI) GC(_ CLIArgs, _ CLIFlags) error {
+	unreachable, err := base.GC()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Removed %d unreachable objects\n", unreachable)
+	return nil
+}
+
 func main() {
 	input := os.Args
 
@@ -426,6 +435,7 @@ func main() {
 		"push":       {cli.Push, 2, none},
 		"add":        {cli.Add, 1, none},
 		"read-index": {cli.ReadIndex, 0, none},
+		"gc":         {cli.GC, 0, none},
 	}
 
 	if fn, ok := commands[cmd]; ok {

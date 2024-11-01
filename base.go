@@ -697,6 +697,41 @@ func (Base) getRebaseCommits(oid1, oid2 string) []string {
 	return commits
 }
 
+// Garbage collection prunes unreachable objects
+func (Base) GC() (int, error) {
+	reachable := ds.NewSet([]string{})
+
+	// Iterate over all refs
+	for _, ref := range data.iterRefs("heads", true) {
+		// Get all commits reachable from ref
+		commitOIDs := []string{}
+		for commitOID := range base.iterCommitsAndParents([]string{ref.Value}) {
+			commitOIDs = append(commitOIDs, commitOID)
+		}
+
+		// For every object reachable from the commits, mark it
+		err := base.MapObjectsInCommits(commitOIDs, func(oid string) error {
+			reachable.Add(oid)
+			return nil
+		})
+
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	unreachable := 0
+	err := filepath.WalkDir(filepath.Join(GOGIT_DIR, "objects"), func(path string, d fs.DirEntry, err error) error {
+		oid := filepath.Base(path)
+		if oid != "objects" && !reachable.Includes(oid) {
+			unreachable++
+			return data.DeleteObject(oid)
+		}
+		return nil
+	})
+	return unreachable, err
+}
+
 func (Base) K() error {
 	dot := "digraph commits {\n"
 	oids := ds.NewSet([]string{})
