@@ -37,7 +37,7 @@ func Exec(cmd Command, args CLIArgs, flags CLIFlags) {
 		}
 	}
 
-	for flagName, _ := range flags {
+	for flagName := range flags {
 		if _, ok := cmd.commandFlags[flagName]; !ok {
 			fmt.Printf("unknown flag: %s\n", flagName)
 			return
@@ -315,7 +315,7 @@ func (CLI) Merge(args CLIArgs, _ CLIFlags) error {
 	if err := base.Merge(oid); err != nil {
 		return err
 	}
-	fmt.Printf("merged in working tree\n")
+	fmt.Println("Merged in working tree. Please commit")
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -50,15 +51,15 @@ func (Data) isIgnored(path string) bool {
 
 func (Data) emptyCurrentDir() error {
 	return filepath.WalkDir(".", func(path string, di fs.DirEntry, err error) error {
-		if data.isIgnored(path) {
+		if data.isIgnored(path) || strings.Contains(path, GOGIT_DIR) {
 			return nil
 		}
-		rmErr := os.RemoveAll(path)
-		if rmErr != nil {
-			if _, ok := rmErr.(*os.PathError); ok {
+
+		if e := os.RemoveAll(path); e != nil {
+			if _, ok := e.(*os.PathError); ok {
 				return nil
 			}
-			return rmErr
+			return e
 		}
 		// Pass
 		return nil
@@ -154,7 +155,7 @@ func (Data) HashObject(data []byte, _type string) (string, error) {
 	buf := []byte(fmt.Sprintf("%s\x00%s", _type, data))
 
 	hasher.Write(buf)
-	oid := fmt.Sprintf("%x", hasher.Sum(nil))
+	oid := hex.EncodeToString(hasher.Sum(nil))
 
 	fp := filepath.Join(GOGIT_ROOT, "objects", oid)
 	// Is this more efficient than just always writing the file?

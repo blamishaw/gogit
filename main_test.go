@@ -6,18 +6,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 // If this changes, you must change the "tests" Make target as well
 const TEST_DIR = "/tmp/gogit_test"
 
+type ctxKey int
+
+const TestName ctxKey = iota
+
 // ** Test Helpers **
-func expect[T comparable](t *testing.T, ctx context.Context, received, target T) {
+func expectEquals[T comparable](t *testing.T, ctx context.Context, received, target T) {
 	if target != received {
-		t.Errorf("%s:\nexpected: \"%v\"\nrecieved: \"%v\"", ctx.Value("name"), target, received)
+		cleanup(t, fmt.Errorf("%s:\nexpected: \"%v\"\nreceived: \"%v\"", ctx.Value(TestName), target, received))
+	}
+}
+
+func expectNotEquals[T comparable](t *testing.T, ctx context.Context, received, target T) {
+	if target == received {
+		cleanup(t, fmt.Errorf("%s:\nexpected: \"%v\"\nreceived: \"%v\"", ctx.Value(TestName), target, received))
 	}
 }
 
@@ -25,21 +37,21 @@ func expectExists(t *testing.T, ctx context.Context, path string, shouldExist bo
 	fp := filepath.Join(TEST_DIR, path)
 	_, err := os.Stat(fp)
 	if err != nil && shouldExist {
-		t.Errorf("%s: %s does not exist", ctx.Value("name"), fp)
+		cleanup(t, fmt.Errorf("%s:\n%s does not exist", ctx.Value(TestName), fp))
 	}
 
 	if err == nil && !shouldExist {
-		t.Errorf("%s: %s exists", ctx.Value("name"), fp)
+		cleanup(t, fmt.Errorf("%s:\n%s exists", ctx.Value(TestName), fp))
 	}
 }
 
 func expectDirLength(t *testing.T, ctx context.Context, dirPath string, length int) {
 	files, err := os.ReadDir(dirPath)
 	if err != nil {
-		t.Errorf("%s: %s", ctx.Value("name"), err)
+		cleanup(t, fmt.Errorf("%s:\n%s", ctx.Value(TestName), err))
 	}
 	if len(files) != length {
-		t.Errorf("%s:\nexpected %d file(s)\nreceived %d file(s)", ctx.Value("name"), length, len(files))
+		cleanup(t, fmt.Errorf("%s:\nexpected %d file(s)\nreceived %d file(s)", ctx.Value(TestName), length, len(files)))
 	}
 }
 
@@ -51,7 +63,7 @@ func expectOutput(t *testing.T, ctx context.Context, fn func(), expected string)
 	w.Close()
 	out, _ := io.ReadAll(r)
 	os.Stdout = rescueStdout
-	expect(t, ctx, string(out), expected)
+	expectEquals(t, ctx, string(out), expected)
 }
 
 // ** End Test Helpers **
@@ -61,9 +73,9 @@ func setupInit() error {
 	COMPRESS_OBJECTS = false
 
 	initDirs := []string{
-		filepath.Join(TEST_DIR, GOGIT_DIR, "objects"),
-		filepath.Join(TEST_DIR, GOGIT_DIR, "refs", "heads"),
-		filepath.Join(TEST_DIR, GOGIT_DIR, "refs", "tags"),
+		filepath.Join(GOGIT_ROOT, "objects"),
+		filepath.Join(GOGIT_ROOT, "refs", "heads"),
+		filepath.Join(GOGIT_ROOT, "refs", "tags"),
 	}
 
 	for _, dir := range initDirs {
@@ -73,11 +85,11 @@ func setupInit() error {
 		}
 	}
 
-	return os.WriteFile(filepath.Join(TEST_DIR, GOGIT_DIR, HEAD), []byte("ref: refs/heads/main"), FP)
+	return setHEAD("main")
 }
 
 func setupCreateObject(oid string, content []byte) error {
-	return os.WriteFile(filepath.Join(GOGIT_DIR, "objects", oid), content, FP)
+	return os.WriteFile(filepath.Join(TEST_DIR, GOGIT_DIR, "objects", oid), content, FP)
 }
 
 func setupCreateFile(path string, content []byte, addToIndex bool) error {
@@ -99,33 +111,59 @@ func setupCreateFile(path string, content []byte, addToIndex bool) error {
 	return os.WriteFile(filepath.Join(TEST_DIR, path), content, FP)
 }
 
-func setupCommit(commitOID string) {
-	filename := "test.txt"
-	blobContent := []byte("Hello World!")
-	setupCreateFile(filename, blobContent, true)
+func setupCommit(branch string, commitOID string, parentOID string, blobs map[string][]byte) {
+	// Create blobs
+	blobOIDs := map[string]string{}
+	for path, content := range blobs {
+		setupCreateFile(path, content, true)
 
-	// Create blob
-	blobOID := getOid(blobContent, BLOB)
-	setupCreateObject(blobOID, []byte(fmt.Sprintf("blob\x00%s", blobContent)))
+		blobOID := getOid(content, BLOB)
+		setupCreateObject(blobOID, []byte(fmt.Sprintf("blob\x00%s", content)))
+		blobOIDs[path] = blobOID
+	}
 
 	// Create tree
-	treeContent := []byte(fmt.Sprintf("%s %s blob", filename, blobOID))
-	treeOID := getOid(treeContent, TREE)
+	var treeContent string
+	for path, blobOID := range blobOIDs {
+		treeContent += fmt.Sprintf("%s %s blob\n", path, blobOID)
+	}
+
+	treeOID := getOid([]byte(treeContent), TREE)
 	setupCreateObject(treeOID, []byte(fmt.Sprintf("tree\x00%s", treeContent)))
 
+	var parentString string
+	if parentOID != "" {
+		parentString = fmt.Sprintf("\nparent %s", parentOID)
+	}
+
 	// Create commit
-	setupCreateObject(commitOID, []byte(fmt.Sprintf("commit\x00tree %s\ntime XXX\nmessage XXX", treeOID)))
+	setupCreateObject(commitOID, []byte(fmt.Sprintf("commit\x00tree %s\ntime 12:00%s\nmessage XXX", treeOID, parentString)))
 
 	os.MkdirAll(filepath.Join(GOGIT_DIR, "refs", "heads"), FP)
-	os.WriteFile(filepath.Join(GOGIT_DIR, "refs", "heads", "main"), []byte(commitOID), FP)
-	os.WriteFile(filepath.Join(GOGIT_DIR, HEAD), []byte("ref: refs/heads/main"), FP)
+	os.WriteFile(filepath.Join(GOGIT_DIR, "refs", "heads", branch), []byte(commitOID), FP)
+	setHEAD(branch)
 }
 
-func setupBranch(name string) {
-	commitOID := "commit-sha-123"
-	setupCommit(commitOID)
+func setupBranch(name string, branchOff string, numCommits int) {
+	var parent string
+	if branchOff != "" {
+		parent = inspectRef(fmt.Sprintf("refs/heads/%s", branchOff))
+	}
+
+	for i := range numCommits {
+		commitOID := fmt.Sprintf("%s-commit-%d", name, i+1)
+		setupCommit(name, commitOID, parent, map[string][]byte{
+			"test-1.txt": []byte(fmt.Sprintf("Testing branch \"%s\" commit %d!", name, i+1)),
+			"test-2.txt": []byte(fmt.Sprintf("Testing branch \"%s\" commit %d!", name, i+1)),
+			"test-3.txt": []byte(fmt.Sprintf("Testing branch \"%s\" commit %d!", name, i+1)),
+		})
+		parent = commitOID
+	}
+
 	os.MkdirAll(filepath.Join(GOGIT_DIR, "refs", "heads"), FP)
-	os.WriteFile(filepath.Join(GOGIT_DIR, "refs", "heads", name), []byte(commitOID), FP)
+	os.WriteFile(filepath.Join(GOGIT_DIR, "refs", "heads", name), []byte(parent), FP)
+	// Set HEAD back to main
+	setHEAD("main")
 }
 
 func inspectRef(ref string) string {
@@ -149,14 +187,38 @@ func inspectIndex() map[string]string {
 	return index
 }
 
+func inspectFile(filePath string) []byte {
+	content, err := os.ReadFile(filepath.Join(TEST_DIR, filePath))
+	if err != nil {
+		return []byte{}
+	}
+	return content
+}
+
+func setHEAD(refName string) error {
+	return os.WriteFile(filepath.Join(GOGIT_DIR, HEAD), []byte(fmt.Sprintf("ref: refs/heads/%s", refName)), FP)
+}
+
 func getOid(data []byte, _type string) string {
 	hasher := sha1.New()
 	hasher.Write([]byte(fmt.Sprintf("%s\x00%s", _type, data)))
 	return fmt.Sprintf("%x", hasher.Sum(nil))
 }
 
-func teardownRemoveRoot() error {
-	return os.RemoveAll(GOGIT_DIR)
+func cleanup(t *testing.T, err error) {
+	os.RemoveAll(GOGIT_DIR)
+
+	filepath.WalkDir(TEST_DIR, func(path string, _ fs.DirEntry, _ error) error {
+		if path != TEST_DIR {
+			return os.RemoveAll(path)
+		}
+		return nil
+	})
+
+	if err != nil {
+		t.Error(err)
+		t.FailNow()
+	}
 }
 
 // ** End Setup/Teardown Helpers **
@@ -170,28 +232,27 @@ func init() {
 
 func Test_CLI(t *testing.T) {
 	testcases := []struct {
-		Name     string
-		Args     CLIArgs
-		Flags    CLIFlags
-		Setup    func()
-		TearDown func()
-		Run      func(args CLIArgs, flags CLIFlags)
+		Name    string
+		Args    CLIArgs
+		Flags   CLIFlags
+		Setup   func()
+		Cleanup func()
+		Run     func(args CLIArgs, flags CLIFlags)
 	}{
 		{
 			Name:  "Init",
 			Args:  CLIArgs{},
 			Flags: CLIFlags{},
 			Setup: func() {},
-			TearDown: func() {
-				teardownRemoveRoot()
+			Cleanup: func() {
+				cleanup(t, nil)
 			},
 			Run: func(args CLIArgs, flags CLIFlags) {
-				ctx := context.WithValue(context.Background(), "name", "Init")
-				err := cli.Init(args, flags)
-				if err != nil {
-					t.Error(err)
-					t.FailNow()
+				ctx := context.WithValue(context.Background(), TestName, "Init")
+				if err := cli.Init(args, flags); err != nil {
+					cleanup(t, err)
 				}
+
 				expectExists(t, ctx, GOGIT_DIR, true)
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, "objects"), true)
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, "refs", "heads"), true)
@@ -205,18 +266,17 @@ func Test_CLI(t *testing.T) {
 			Setup: func() {
 				setupInit()
 			},
-			TearDown: func() {
-				teardownRemoveRoot()
+			Cleanup: func() {
+				cleanup(t, nil)
 			},
 			Run: func(args CLIArgs, flags CLIFlags) {
-				ctx := context.WithValue(context.Background(), "name", "Checkout - New Branch")
-				err := cli.Checkout(args, flags)
-				if err != nil {
-					t.Error(err)
-					t.FailNow()
+				ctx := context.WithValue(context.Background(), TestName, "Checkout - New Branch")
+				if err := cli.Checkout(args, flags); err != nil {
+					cleanup(t, err)
 				}
+
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, HEAD), true)
-				expect(t, ctx, inspectRef(HEAD), "ref: refs/heads/new-branch")
+				expectEquals(t, ctx, inspectRef(HEAD), "ref: refs/heads/new-branch")
 			},
 		},
 		{
@@ -225,42 +285,46 @@ func Test_CLI(t *testing.T) {
 			Flags: CLIFlags{},
 			Setup: func() {
 				setupInit()
-				setupBranch("existing-branch")
+				setupBranch("existing-branch", "main", 1)
 			},
-			TearDown: func() {
-				// teardownRemoveRoot()
+			Cleanup: func() {
+				cleanup(t, nil)
 			},
 			Run: func(args CLIArgs, flags CLIFlags) {
-				ctx := context.WithValue(context.Background(), "name", "Checkout - Existing Branch")
-				err := cli.Checkout(args, flags)
-				if err != nil {
-					t.Error(err)
-					t.FailNow()
+				ctx := context.WithValue(context.Background(), TestName, "Checkout - Existing Branch")
+
+				// Change content of file
+				os.WriteFile(filepath.Join(TEST_DIR, "test-1.txt"), []byte("Goodbye World!"), FP)
+				expectEquals(t, ctx, string(inspectFile("test-1.txt")), "Goodbye World!")
+
+				if err := cli.Checkout(args, flags); err != nil {
+					cleanup(t, err)
 				}
+
+				expectEquals(t, ctx, string(inspectFile("test-1.txt")), "Testing branch \"existing-branch\" commit 1!")
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, HEAD), true)
-				expect(t, ctx, inspectRef(HEAD), "ref: refs/heads/existing-branch")
+				expectEquals(t, ctx, inspectRef(HEAD), "ref: refs/heads/existing-branch")
 			},
 		},
 		{
 			Name:  "Tag",
-			Args:  CLIArgs{"new-tag", "commit-sha-123"},
+			Args:  CLIArgs{"new-tag", "commit-1"},
 			Flags: CLIFlags{},
 			Setup: func() {
 				setupInit()
-				setupCommit("commit-sha-123")
+				setupCommit("main", "commit-1", "", map[string][]byte{"test.txt": []byte("Hello World!")})
 			},
-			TearDown: func() {
-				teardownRemoveRoot()
+			Cleanup: func() {
+				cleanup(t, nil)
 			},
 			Run: func(args CLIArgs, flags CLIFlags) {
-				ctx := context.WithValue(context.Background(), "name", "Tag")
-				err := cli.Tag(args, flags)
-				if err != nil {
-					t.Error(err)
-					t.FailNow()
+				ctx := context.WithValue(context.Background(), TestName, "Tag")
+				if err := cli.Tag(args, flags); err != nil {
+					cleanup(t, err)
 				}
+
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, "refs", "tags"), true)
-				expect(t, ctx, inspectRef("refs/tags/new-tag"), "commit-sha-123")
+				expectEquals(t, ctx, inspectRef("refs/tags/new-tag"), "commit-1")
 			},
 		},
 		{
@@ -269,13 +333,13 @@ func Test_CLI(t *testing.T) {
 			Flags: CLIFlags{},
 			Setup: func() {
 				setupInit()
-				setupCommit("commit-sha-123")
+				setupCommit("main", "commit-1", "", map[string][]byte{"test.txt": []byte("Hello World!")})
 			},
-			TearDown: func() {
-				teardownRemoveRoot()
+			Cleanup: func() {
+				cleanup(t, nil)
 			},
 			Run: func(args CLIArgs, flags CLIFlags) {
-				ctx := context.WithValue(context.Background(), "name", "Branch - Lists Branches")
+				ctx := context.WithValue(context.Background(), TestName, "Branch - Lists Branches")
 				expectOutput(t, ctx, func() {
 					cli.Branch(args, flags)
 				}, "* main\n")
@@ -287,21 +351,20 @@ func Test_CLI(t *testing.T) {
 			Flags: CLIFlags{},
 			Setup: func() {
 				setupInit()
-				setupCommit("commit-sha-123")
+				setupCommit("main", "commit-1", "", map[string][]byte{"test.txt": []byte("Hello World!")})
 			},
-			TearDown: func() {
-				teardownRemoveRoot()
+			Cleanup: func() {
+				cleanup(t, nil)
 			},
 			Run: func(args CLIArgs, flags CLIFlags) {
-				ctx := context.WithValue(context.Background(), "name", "Branch - New Branch")
-				err := cli.Branch(args, flags)
-				if err != nil {
-					t.Error(err)
-					t.FailNow()
+				ctx := context.WithValue(context.Background(), TestName, "Branch - New Branch")
+				if err := cli.Branch(args, flags); err != nil {
+					cleanup(t, err)
 				}
-				expect(t, ctx, inspectRef(HEAD), "ref: refs/heads/main")
+
+				expectEquals(t, ctx, inspectRef(HEAD), "ref: refs/heads/main")
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, "refs", "heads", "new-branch"), true)
-				expect(t, ctx, inspectRef("refs/heads/new-branch"), "commit-sha-123")
+				expectEquals(t, ctx, inspectRef("refs/heads/new-branch"), "commit-1")
 			},
 		},
 		{
@@ -312,18 +375,17 @@ func Test_CLI(t *testing.T) {
 				setupInit()
 				setupCreateFile("test.txt", []byte("Hello World!"), false)
 			},
-			TearDown: func() {
-				teardownRemoveRoot()
+			Cleanup: func() {
+				cleanup(t, nil)
 			},
 			Run: func(args CLIArgs, flags CLIFlags) {
-				ctx := context.WithValue(context.Background(), "name", "Add - Individual File")
-				err := cli.Add(args, flags)
-				if err != nil {
-					t.Error(err)
-					t.FailNow()
+				ctx := context.WithValue(context.Background(), TestName, "Add - Individual File")
+				if err := cli.Add(args, flags); err != nil {
+					cleanup(t, err)
 				}
+
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, "index"), true)
-				expect(t, ctx, inspectIndex()["test.txt"], getOid([]byte("Hello World!"), BLOB))
+				expectEquals(t, ctx, inspectIndex()["test.txt"], getOid([]byte("Hello World!"), BLOB))
 			},
 		},
 		{
@@ -338,18 +400,17 @@ func Test_CLI(t *testing.T) {
 				setupCreateFile("./subdir2/test_subdir2_1.txt", []byte("Hello World Subdir2_1!"), false)
 				setupCreateFile("./subdir2/subsubdir1/test_subdir2_subsubdir1_1.txt", []byte("Hello World Subdir2_SubSubdir1_1!"), false)
 			},
-			TearDown: func() {
-				teardownRemoveRoot()
+			Cleanup: func() {
+				cleanup(t, nil)
 			},
 			Run: func(args CLIArgs, flags CLIFlags) {
-				ctx := context.WithValue(context.Background(), "name", "Add - Directory")
-				err := cli.Add(args, flags)
-				if err != nil {
-					t.Error(err)
-					t.FailNow()
+				ctx := context.WithValue(context.Background(), TestName, "Add - Directory")
+				if err := cli.Add(args, flags); err != nil {
+					cleanup(t, err)
 				}
+
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, "index"), true)
-				expect(t, ctx, len(inspectIndex()), 5)
+				expectEquals(t, ctx, len(inspectIndex()), 5)
 			},
 		},
 		{
@@ -360,27 +421,132 @@ func Test_CLI(t *testing.T) {
 				setupInit()
 				setupCreateFile("test.txt", []byte("Hello World!"), true)
 			},
-			TearDown: func() {
-				teardownRemoveRoot()
+			Cleanup: func() {
+				cleanup(t, nil)
 			},
 			Run: func(args CLIArgs, flags CLIFlags) {
-				ctx := context.WithValue(context.Background(), "name", "Commit")
-				err := cli.Commit(args, flags)
-				if err != nil {
-					t.Error(err)
-					t.FailNow()
+				ctx := context.WithValue(context.Background(), TestName, "Commit")
+				if err := cli.Commit(args, flags); err != nil {
+					cleanup(t, err)
 				}
+
 				expectExists(t, ctx, filepath.Join(GOGIT_DIR, HEAD), true)
-				expect(t, ctx, inspectRef(HEAD), "ref: refs/heads/main")
+				expectEquals(t, ctx, inspectRef(HEAD), "ref: refs/heads/main")
 				expectDirLength(t, ctx, filepath.Join(GOGIT_DIR, "objects"), 3) // commit, tree, blob
+			},
+		},
+		{
+			Name:  "Merge and Commit",
+			Args:  CLIArgs{"main"},
+			Flags: CLIFlags{},
+			Setup: func() {
+				setupInit()
+				setupCommit("main", "main-commit-1", "", map[string][]byte{"test-1.txt": []byte("Hello World!")})
+				// Create branch off main with 2 commits
+				setupBranch("first-branch", "main", 2)
+				// Make another commit on main
+				setupCommit("main", "main-commit-2", "main-commit-1", map[string][]byte{"test-1.txt": []byte("Hello World Again!")})
+				// set HEAD to new branch
+				setHEAD("first-branch")
+			},
+			Cleanup: func() {
+				cleanup(t, nil)
+			},
+			Run: func(args CLIArgs, flags CLIFlags) {
+				ctx := context.WithValue(context.Background(), TestName, "Merge and Commit")
+				if err := cli.Merge(args, flags); err != nil {
+					cleanup(t, err)
+				}
+
+				expectExists(t, ctx, filepath.Join(GOGIT_DIR, MERGE_HEAD), true)
+				expectEquals(t, ctx, inspectRef(MERGE_HEAD), "main-commit-2")
+				expectEquals(t, ctx, inspectRef(HEAD), "ref: refs/heads/first-branch")
+
+				if err := cli.Commit(CLIArgs{}, CLIFlags{"message": "merge commit"}); err != nil {
+					cleanup(t, err)
+				}
+
+				expectExists(t, ctx, filepath.Join(GOGIT_DIR, MERGE_HEAD), false)
+				commit := inspectFile(filepath.Join(GOGIT_DIR, "objects", inspectRef("refs/heads/first-branch")))
+				expectEquals(t, ctx, strings.Count(string(commit), "parent"), 2)
+			},
+		},
+		{
+			Name:  "Merge - Fast Forward",
+			Args:  CLIArgs{"main"},
+			Flags: CLIFlags{},
+			Setup: func() {
+				setupInit()
+				setupCommit("main", "main-commit-1", "", map[string][]byte{"test-1.txt": []byte("Hello World!")})
+				// Create branch off main with 0 commits
+				setupBranch("first-branch", "main", 0)
+				// Make another commit on main
+				setupCommit("main", "main-commit-2", "main-commit-1", map[string][]byte{"test-1.txt": []byte("Hello World Again!")})
+				// set HEAD to new branch
+				setHEAD("first-branch")
+			},
+			Cleanup: func() {
+				cleanup(t, nil)
+			},
+			Run: func(args CLIArgs, flags CLIFlags) {
+				ctx := context.WithValue(context.Background(), TestName, "Merge - Fast Forward")
+				if err := cli.Merge(args, flags); err != nil {
+					cleanup(t, err)
+				}
+
+				expectExists(t, ctx, filepath.Join(GOGIT_DIR, MERGE_HEAD), false)
+				expectEquals(t, ctx, inspectRef(HEAD), "ref: refs/heads/first-branch")
+				expectEquals(t, ctx, inspectRef("refs/heads/first-branch"), "main-commit-2")
+			},
+		},
+		{
+			Name:  "Rebase",
+			Args:  CLIArgs{"main"},
+			Flags: CLIFlags{},
+			Setup: func() {
+				setupInit()
+				setupCommit("main", "main-commit-1", "", map[string][]byte{"test-1.txt": []byte("Hello World!")})
+				// Create branch off main with 2 commits
+				setupBranch("first-branch", "main", 2)
+				// Make another commit on main
+				setupCommit("main", "main-commit-2", "main-commit-1", map[string][]byte{"test-1.txt": []byte("Hello World Again!")})
+				// set HEAD to new branch
+				setHEAD("first-branch")
+			},
+			Cleanup: func() {
+				cleanup(t, nil)
+			},
+			Run: func(args CLIArgs, flags CLIFlags) {
+				ctx := context.WithValue(context.Background(), TestName, "Rebase")
+				if err := cli.Rebase(args, flags); err != nil {
+					cleanup(t, err)
+				}
+
+				expectEquals(t, ctx, inspectRef(HEAD), "ref: refs/heads/first-branch")
+
+				// Rebase applies new commits so the commit ids of branch "first-branch" should be different
+				currRef := inspectRef("refs/heads/first-branch")
+				expectNotEquals(t, ctx, currRef, "first-branch-commit-2")
+
+				commit, _ := base.GetCommit(currRef)
+				currRef = commit.ParentOids[0]
+				expectNotEquals(t, ctx, currRef, "first-branch-commit-1")
+
+				commit, _ = base.GetCommit(currRef)
+				currRef = commit.ParentOids[0]
+				expectEquals(t, ctx, currRef, "main-commit-2")
+
+				commit, _ = base.GetCommit(currRef)
+				currRef = commit.ParentOids[0]
+				expectEquals(t, ctx, currRef, "main-commit-1")
 			},
 		},
 	}
 
 	for _, test := range testcases {
-		t.Logf("Test: %s", test.Name)
+		t.Logf("Test: %s\n", test.Name)
 		test.Setup()
 		test.Run(test.Args, test.Flags)
-		test.TearDown()
+		test.Cleanup()
 	}
 }

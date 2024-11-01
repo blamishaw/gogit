@@ -41,8 +41,11 @@ func (Diff) getDiffCmdAndArgs(action int, path string, files []string) (string, 
 	case MERGE:
 		cmd := "diff3"
 		args := []string{"-m"}
-		commitSHA := filepath.Base(files[2])
-		labels := [3]string{HEAD, BASE, commitSHA[:10]}
+		commitLabel := filepath.Base(files[2])
+		if len(commitLabel) > 10 {
+			commitLabel = commitLabel[:10]
+		}
+		labels := [3]string{HEAD, BASE, commitLabel}
 		for i, file := range files {
 			args = append(args, "-L", labels[i], file)
 		}
