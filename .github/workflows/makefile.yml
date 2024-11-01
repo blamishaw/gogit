@@ -7,13 +7,18 @@ on:
     branches: ["main"]
 
 jobs:
-  build:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Golangci-lint
+        uses: golangci/golangci-lint-action@v6.1.1
+
+  test:
     runs-on: ubuntu-latest
 
     steps:
       - name: checkout repo
         uses: actions/checkout@main
-      - name: Golangci-lint
-        uses: golangci/golangci-lint-action@v6.1.1
       - name: test
         run: make test
