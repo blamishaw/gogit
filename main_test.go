@@ -557,9 +557,8 @@ func Test_CLI(t *testing.T) {
 					"test-branch-2.txt": []byte("Hello World 2!"),
 				})
 
-				// Remove new-branch ref (commit, tree, and blob are now unreachable)
-				err := os.Remove(filepath.Join(GOGIT_DIR, "refs", "heads", "new-branch-1"))
-				if err != nil {
+				// Remove new-branch-1 ref (commit, tree, and blob are now unreachable)
+				if err := os.Remove(filepath.Join(GOGIT_DIR, "refs", "heads", "new-branch-1")); err != nil {
 					cleanup(t, err)
 				}
 			},
