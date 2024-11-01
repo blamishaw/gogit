@@ -1,16 +1,17 @@
-name: Makefile CI
+name: GoGit CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-    - name: configure
-      run: make test
+      - name: checkout repo
+        uses: actions/checkout@main
+      - name: test
+        run: make test
