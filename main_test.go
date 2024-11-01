@@ -1,4 +1,4 @@
-//nolint:unparam
+// nolint
 package main
 
 import (

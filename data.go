@@ -122,14 +122,17 @@ func (Data) Init() error {
 }
 
 // ChangeRootDir updates the gogit root directory, executes fn, and restores the gogit root
-func (Data) ChangeRootDir(newDir string, fn func()) {
+func (Data) ChangeRootDir(newDir string, fn func() error) error {
 	prev := GOGIT_ROOT
 	GOGIT_ROOT = newDir
-	fn()
+	err := fn()
 	GOGIT_ROOT = prev
+	return err
 }
 
-func (Data) WithIndex(fn func(index map[string]string) error) error {
+func (Data) WithIndex(
+	fn func(index map[string]string) (map[string]string, error),
+) error {
 	index := make(map[string]string)
 
 	data, err := os.ReadFile(GOGIT_INDEX)
@@ -141,11 +144,12 @@ func (Data) WithIndex(fn func(index map[string]string) error) error {
 		return err
 	}
 
-	if err = fn(index); err != nil {
+	newIndex, err := fn(index)
+	if err != nil {
 		return err
 	}
 
-	jsonData, err := json.Marshal(index)
+	jsonData, err := json.Marshal(newIndex)
 	if err != nil {
 		return err
 	}
