@@ -27,13 +27,19 @@ func TestSet_Pop(t *testing.T) {
 	s := NewSet([]int{1, 2})
 	length := s.Length()
 
-	s.Pop()
+	_, err := s.Pop()
+	if err != nil {
+		panic(err)
+	}
 	expect(t, s.Length(), length-1)
 
-	s.Pop()
+	_, err = s.Pop()
+	if err != nil {
+		panic(err)
+	}
 	expect(t, s.Length(), length-2)
 
-	expectPanic(t, func() { s.Pop() })
+	expectPanic(t, func() { _, _ = s.Pop() })
 
 }
 

@@ -143,7 +143,10 @@ func (Base) mapObjectsInTree(treeOID string, visited *ds.Set[string], mapFn func
 		}
 
 		if node.Type == TREE {
-			base.mapObjectsInTree(node.Oid, visited, mapFn)
+			err := base.mapObjectsInTree(node.Oid, visited, mapFn)
+			if err != nil {
+				return err
+			}
 		} else {
 			visited.Add(node.Oid)
 			err := mapFn(node.Oid)
@@ -550,8 +553,7 @@ func (Base) Merge(oid string) error {
 		if err != nil {
 			return err
 		}
-		data.UpdateRef(HEAD, &RefValue{false, oid}, true)
-		return nil
+		return data.UpdateRef(HEAD, &RefValue{false, oid}, true)
 	}
 
 	headCommit, err := base.GetCommit(headRef.Value)

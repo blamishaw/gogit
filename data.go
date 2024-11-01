@@ -71,7 +71,7 @@ func (Data) iterRefs(prefix string, deref bool) iter.Seq2[string, *RefValue] {
 	return func(yield func(string, *RefValue) bool) {
 		refNames := []string{HEAD, MERGE_HEAD}
 		refDir := filepath.Join("refs", prefix)
-		filepath.WalkDir(filepath.Join(GOGIT_ROOT, refDir), func(path string, d fs.DirEntry, err error) error {
+		err := filepath.WalkDir(filepath.Join(GOGIT_ROOT, refDir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -82,6 +82,10 @@ func (Data) iterRefs(prefix string, deref bool) iter.Seq2[string, *RefValue] {
 			}
 			return nil
 		})
+
+		if err != nil {
+			panic(err)
+		}
 
 		for _, refName := range refNames {
 			if !strings.HasPrefix(refName, refDir) {
@@ -167,7 +171,7 @@ func (Data) HashObject(data []byte, _type string) (string, error) {
 	var b bytes.Buffer
 	if COMPRESS_OBJECTS {
 		w := zlib.NewWriter(&b)
-		w.Write(buf)
+		_, _ = w.Write(buf)
 		w.Close()
 	} else {
 		b = *bytes.NewBuffer(buf)
@@ -194,7 +198,7 @@ func (Data) GetObject(oid, targetType string) ([]byte, error) {
 		if err != nil {
 			return []byte{}, err
 		}
-		io.Copy(&b, r)
+		_, _ = io.Copy(&b, r)
 		r.Close()
 	} else {
 		b = *bytes.NewBuffer(data)
