@@ -19,9 +19,6 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.60
-        issues:
-          exclude:
-            - main_test.go
   test:
     runs-on: ubuntu-latest
     steps:
