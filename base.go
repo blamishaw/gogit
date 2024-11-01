@@ -710,10 +710,14 @@ func (Base) GC() (int, error) {
 		}
 
 		// For every object reachable from the commits, mark it
-		base.MapObjectsInCommits(commitOIDs, func(oid string) error {
+		err := base.MapObjectsInCommits(commitOIDs, func(oid string) error {
 			reachable.Add(oid)
 			return nil
 		})
+
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	unreachable := 0

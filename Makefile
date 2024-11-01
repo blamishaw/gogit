@@ -12,6 +12,9 @@ ifneq ("$(PERSIST)", "true")
 	rm -rf /tmp/gogit_test
 endif
 
+lint:
+	golangci-lint run .
+
 reset:
 	rm -rf .gogit
 
