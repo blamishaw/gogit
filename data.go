@@ -10,8 +10,10 @@ import (
 	"io"
 	"io/fs"
 	"iter"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 )
@@ -136,17 +138,28 @@ func (Data) WithIndex(
 	index := make(map[string]string)
 
 	data, err := os.ReadFile(GOGIT_INDEX)
-	if err != nil && !os.IsNotExist(err) {
-		return err
+	indexCreated := !os.IsNotExist(err)
+
+	if err != nil {
+		if indexCreated {
+			return err
+		}
 	}
 
 	if err = json.Unmarshal(data, &index); len(data) > 0 && err != nil {
 		return err
 	}
 
-	newIndex, err := fn(index)
+	// Pass copy of index to fn
+	// This is important for the reflect.DeepEqual call below
+	newIndex, err := fn(maps.Clone(index))
 	if err != nil {
 		return err
+	}
+
+	// No need to rewrite index
+	if indexCreated && reflect.DeepEqual(index, newIndex) {
+		return nil
 	}
 
 	jsonData, err := json.Marshal(newIndex)

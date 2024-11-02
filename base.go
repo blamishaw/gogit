@@ -720,8 +720,18 @@ func (Base) GC() (int, error) {
 		}
 	}
 
+	// We also don't want to delete anything reachable from the index
+	index, err := base.GetIndexTree()
+	if err != nil {
+		return 0, err
+	}
+
+	for _, oid := range index {
+		reachable.Add(oid)
+	}
+
 	unreachable := 0
-	err := filepath.WalkDir(filepath.Join(GOGIT_DIR, "objects"), func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(filepath.Join(GOGIT_DIR, "objects"), func(path string, d fs.DirEntry, err error) error {
 		oid := filepath.Base(path)
 		if oid != "objects" && !reachable.Includes(oid) {
 			unreachable++
