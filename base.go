@@ -42,13 +42,13 @@ func (Base) isAncestorOf(oid1, oid2 string) bool {
 }
 
 func (Base) iterBranches() (iter.Seq2[string, *RefValue], error) {
-	refs, err := data.iterRefs("heads", true)
+	refIter, err := data.iterRefs("heads", true)
 	if err != nil {
 		return nil, err
 	}
 
 	return func(yield func(string, *RefValue) bool) {
-		for refName, ref := range refs {
+		for refName, ref := range refIter {
 			if !yield(filepath.Base(refName), ref) {
 				return
 			}

@@ -414,8 +414,8 @@ func parseFlags(flags CLIFlags, args CLIArgs, flagIdx int) (CLIFlags, CLIArgs, e
 	_ = flag.CommandLine.Parse(args[flagIdx:])
 
 	f := CLIFlags{}
-	for name, flag := range flags {
-		switch v := flag.(type) {
+	for name, value := range flags {
+		switch v := value.(type) {
 		case *string:
 			if len(*v) > 0 {
 				f[name] = *v
