@@ -59,8 +59,8 @@ func (CLI) Init(_ CLIArgs, _ CLIFlags) error {
 }
 
 func (CLI) CatFile(args CLIArgs, _ CLIFlags) error {
-	fp, t := args[0], args[1]
-	buf, err := data.GetObject(fp, t)
+	fp := args[0]
+	buf, _, err := data.GetObject(fp)
 	if err != nil {
 		return err
 	}
@@ -206,7 +206,13 @@ func (CLI) Status(_ CLIArgs, _ CLIFlags) error {
 	}
 
 	fmt.Printf("\nChanges to be commited:\n")
-	for path, action := range diff.iterChangedFiles(base.GetTree(headTreeOID, ""), indexTree) {
+
+	headTree, err := base.GetTree(headTreeOID, "")
+	if err != nil {
+		return err
+	}
+
+	for path, action := range diff.iterChangedFiles(headTree, indexTree) {
 		diff.PrettyPrint(fmt.Sprintf("%s: %s", action, path))
 	}
 
@@ -242,7 +248,18 @@ func (CLI) Show(args CLIArgs, _ CLIFlags) error {
 		parentTreeOid = parentCommit.TreeOid
 	}
 	base.printCommit(oid, *c, []string{})
-	out, err := diff.DiffTrees(base.GetTree(parentTreeOid, ""), base.GetTree(c.TreeOid, ""))
+
+	parentTree, err := base.GetTree(parentTreeOid, "")
+	if err != nil {
+		return err
+	}
+
+	tree, err := base.GetTree(c.TreeOid, "")
+	if err != nil {
+		return err
+	}
+
+	out, err := diff.DiffTrees(parentTree, tree)
 	if err != nil {
 		return err
 	}
@@ -262,7 +279,11 @@ func (CLI) Diff(args CLIArgs, flags CLIFlags) error {
 		if err != nil {
 			return err
 		}
-		treeFrom = base.GetTree(commit.TreeOid, "")
+
+		treeFrom, err = base.GetTree(commit.TreeOid, "")
+		if err != nil {
+			return err
+		}
 	}
 
 	var err error
@@ -282,7 +303,10 @@ func (CLI) Diff(args CLIArgs, flags CLIFlags) error {
 				if err != nil {
 					return err
 				}
-				treeFrom = base.GetTree(oid, c.TreeOid)
+				treeFrom, err = base.GetTree(oid, c.TreeOid)
+				if err != nil {
+					return err
+				}
 			}
 
 		}
@@ -376,7 +400,35 @@ func (CLI) GC(_ CLIArgs, _ CLIFlags) error {
 	return nil
 }
 
+func parseFlags(flags CLIFlags, args CLIArgs, flagIdx int) (CLIFlags, CLIArgs, error) {
+	if flagIdx < 0 {
+		return CLIFlags{}, args, nil
+	}
+
+	_ = flag.CommandLine.Parse(args[flagIdx:])
+
+	f := CLIFlags{}
+	for name, flag := range flags {
+		switch v := flag.(type) {
+		case *string:
+			if len(*v) > 0 {
+				f[name] = *v
+			}
+		case *bool:
+			flags[name] = *v
+			if *v {
+				f[name] = *v
+			}
+		default:
+			return CLIFlags{}, CLIArgs{}, fmt.Errorf("error: unknown flag type %s", v)
+		}
+	}
+
+	return f, args[:flagIdx], nil
+}
+
 func main() {
+	var err error
 	input := os.Args
 
 	if len(input) < 2 {
@@ -394,31 +446,22 @@ func main() {
 		}
 	}
 
-	flags := make(CLIFlags)
-	messageFlag := flag.String("m", "", "commit message")
-	branchFlag := flag.String("b", "", "branch name")
-	cachedFlag := flag.Bool("cached", false, "diff using index")
-	if firstArgWithDash >= 0 {
-		_ = flag.CommandLine.Parse(args[firstArgWithDash:])
-		if len(*messageFlag) > 0 {
-			flags["message"] = *messageFlag
-		}
+	flags := CLIFlags{
+		"message": flag.String("m", "", "commit message"),
+		"branch":  flag.String("b", "", "branch name"),
+		"cached":  flag.Bool("cached", false, "diff using index"),
+	}
 
-		if len(*branchFlag) > 0 {
-			flags["branch"] = *branchFlag
-		}
-
-		if *cachedFlag {
-			flags["cached"] = *cachedFlag
-		}
-
-		args = args[:firstArgWithDash]
+	flags, args, err = parseFlags(flags, args, firstArgWithDash)
+	if err != nil {
+		fmt.Println(err)
+		return
 	}
 
 	var none map[string]bool
 	commands := map[string]Command{
 		"init":       {cli.Init, 0, none},
-		"cat-file":   {cli.CatFile, 2, none},
+		"cat-file":   {cli.CatFile, 1, none},
 		"commit":     {cli.Commit, 0, map[string]bool{"message": true}},
 		"log":        {cli.Log, 0, none},
 		"checkout":   {cli.Checkout, 0, map[string]bool{"branch": false}},

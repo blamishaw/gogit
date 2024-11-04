@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -58,4 +59,17 @@ type TreeEntry struct {
 type RefValue struct {
 	Symbolic bool
 	Value    string
+}
+
+type ObjectTypeError struct {
+	received string
+	expected string
+}
+
+func (err ObjectTypeError) Error() string {
+	return fmt.Sprintf(
+		"Object is of type: %s\nShould be type: %s",
+		strings.ToUpper(err.received),
+		strings.ToUpper(err.expected),
+	)
 }
