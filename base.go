@@ -41,14 +41,19 @@ func (Base) isAncestorOf(oid1, oid2 string) bool {
 	return false
 }
 
-func (Base) iterBranches() iter.Seq2[string, *RefValue] {
+func (Base) iterBranches() (iter.Seq2[string, *RefValue], error) {
+	refs, err := data.iterRefs("heads", true)
+	if err != nil {
+		return nil, err
+	}
+
 	return func(yield func(string, *RefValue) bool) {
-		for refName, ref := range data.iterRefs("heads", true) {
+		for refName, ref := range refs {
 			if !yield(filepath.Base(refName), ref) {
 				return
 			}
 		}
-	}
+	}, nil
 }
 
 func (Base) iterCommitsAndParents(oids []string) iter.Seq[string] {
@@ -84,15 +89,17 @@ func (Base) iterCommitsAndParents(oids []string) iter.Seq[string] {
 
 func (Base) iterTreeEntries(oid string) (iter.Seq2[int, TreeEntry], error) {
 	if oid == "" {
-		return nil, fmt.Errorf("empty oid")
+		return nil, fmt.Errorf("empty oid: %v", oid)
 	}
 	tree, t, err := data.GetObject(oid)
 	if err != nil {
 		return nil, err
 	}
+
 	if t != TREE {
 		return nil, ObjectTypeError{received: t, expected: TREE}
 	}
+
 	return func(yield func(int, TreeEntry) bool) {
 		for i, entry := range strings.Split(string(tree), "\n") {
 			fields := strings.Split(entry, " ")
@@ -222,6 +229,7 @@ func (Base) checkoutIndex(index map[string]string) error {
 		if t != BLOB {
 			return ObjectTypeError{received: t, expected: BLOB}
 		}
+
 		if err := os.WriteFile(path, obj, FP); err != nil {
 			return err
 		}
@@ -246,9 +254,11 @@ func (Base) GetCommit(oid string) (*CommitObject, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if t != COMMIT {
 		return nil, ObjectTypeError{received: t, expected: COMMIT}
 	}
+
 	var c CommitObject
 	fields := strings.Split(string(buf), "\n")
 	var parents []string
@@ -370,12 +380,12 @@ func (Base) WriteTree(dir string) (string, error) {
 func (Base) GetTree(oid, basePath string) (Tree, error) {
 	result := make(Tree)
 
-	treeEntries, err := base.iterTreeEntries(oid)
+	treeEntriesIter, err := base.iterTreeEntries(oid)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, entry := range treeEntries {
+	for _, entry := range treeEntriesIter {
 		path := filepath.Join(basePath, entry.Name)
 		switch entry.Type {
 		case BLOB:
@@ -491,7 +501,12 @@ func (Base) Commit(message string, timestamp time.Time) (string, error) {
 
 func (Base) Log(oid string) error {
 	refs := make(map[string][]string)
-	for refName, ref := range data.iterRefs("", true) {
+
+	refIter, err := data.iterRefs("", true)
+	if err != nil {
+		return err
+	}
+	for refName, ref := range refIter {
 		refs[ref.Value] = append(refs[ref.Value], refName)
 	}
 
@@ -672,6 +687,7 @@ func (Base) Rebase(oid string) error {
 			return err
 		}
 	}
+
 	// Garbage collect unreachable old commits
 	_, err = base.GC()
 	return err
@@ -745,7 +761,12 @@ func (Base) GC() (int, error) {
 	reachable := ds.NewSet([]string{})
 
 	// Iterate over all refs
-	for _, ref := range data.iterRefs("", true) {
+	refIter, err := data.iterRefs("heads", true)
+	if err != nil {
+		return 0, err
+	}
+
+	for _, ref := range refIter {
 		// Get all commits reachable from ref
 		commitOIDs := []string{}
 		for commitOID := range base.iterCommitsAndParents([]string{ref.Value}) {
@@ -789,7 +810,12 @@ func (Base) K() error {
 	dot := "digraph commits {\n"
 	oids := ds.NewSet([]string{})
 
-	for refName, ref := range data.iterRefs("", false) {
+	refIter, err := data.iterRefs("", false)
+	if err != nil {
+		return err
+	}
+
+	for refName, ref := range refIter {
 		dot += fmt.Sprintf("\"%s\" [shape=note]\n", refName)
 		dot += fmt.Sprintf("\"%s\" -> \"%s\"\n", refName, ref.Value)
 		if !ref.Symbolic {

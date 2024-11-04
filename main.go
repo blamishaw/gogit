@@ -143,7 +143,13 @@ func (CLI) Branch(args CLIArgs, _ CLIFlags) error {
 		if err != nil {
 			return err
 		}
-		for branchName, _ := range base.iterBranches() {
+
+		branchIter, err := base.iterBranches()
+		if err != nil {
+			return err
+		}
+
+		for branchName, _ := range branchIter {
 			if branchName == currentBranch {
 				fmt.Printf("* %s\n", branchName)
 			} else {

@@ -69,26 +69,26 @@ func (Data) emptyCurrentDir() error {
 }
 
 // Iterates over all refs and returns a ref name, and pointer to a RefValue object
-func (Data) iterRefs(prefix string, deref bool) iter.Seq2[string, *RefValue] {
-	return func(yield func(string, *RefValue) bool) {
-		refNames := []string{HEAD, MERGE_HEAD}
-		refDir := filepath.Join("refs", prefix)
-		err := filepath.WalkDir(filepath.Join(GOGIT_ROOT, refDir), func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if !d.IsDir() {
-				relP, err := filepath.Rel(GOGIT_ROOT, path)
-				refNames = append(refNames, relP)
-				return err
-			}
-			return nil
-		})
-
+func (Data) iterRefs(prefix string, deref bool) (iter.Seq2[string, *RefValue], error) {
+	refNames := []string{HEAD, MERGE_HEAD}
+	refDir := filepath.Join("refs", prefix)
+	err := filepath.WalkDir(filepath.Join(GOGIT_ROOT, refDir), func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			panic(err)
+			return err
 		}
+		if !d.IsDir() {
+			relP, err := filepath.Rel(GOGIT_ROOT, path)
+			refNames = append(refNames, relP)
+			return err
+		}
+		return nil
+	})
 
+	if err != nil {
+		return nil, err
+	}
+
+	return func(yield func(string, *RefValue) bool) {
 		for _, refName := range refNames {
 			if !strings.HasPrefix(refName, refDir) {
 				continue
@@ -101,7 +101,7 @@ func (Data) iterRefs(prefix string, deref bool) iter.Seq2[string, *RefValue] {
 				return
 			}
 		}
-	}
+	}, nil
 }
 
 func (Data) Init() error {
