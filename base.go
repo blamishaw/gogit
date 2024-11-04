@@ -18,14 +18,6 @@ type Base struct{}
 // Namespacing
 var base Base
 
-type NoOIDFoundError struct {
-	message string
-}
-
-func (err *NoOIDFoundError) Error() string {
-	return err.message
-}
-
 func (Base) isBranch(name string) bool {
 	ref, err := data.GetRef(filepath.Join("refs/heads", name), true)
 	return err == nil && ref.Value != ""
@@ -89,7 +81,7 @@ func (Base) iterCommitsAndParents(oids []string) iter.Seq[string] {
 
 func (Base) iterTreeEntries(oid string) (iter.Seq2[int, TreeEntry], error) {
 	if oid == "" {
-		return nil, fmt.Errorf("empty oid: %v", oid)
+		return nil, fmt.Errorf("empty oid")
 	}
 	tree, t, err := data.GetObject(oid)
 	if err != nil {
@@ -315,7 +307,7 @@ func (Base) GetOid(name string) (string, error) {
 	if data.isValidSHA1(name) {
 		return name, nil
 	}
-	return "", &NoOIDFoundError{fmt.Sprintf("no oid found with ref: %s", name)}
+	return "", RefNotFoundError{ref: name}
 }
 
 // Init initializes the gogit repository, and points HEAD toward a new branch "main"
@@ -521,11 +513,10 @@ func (Base) Log(oid string) error {
 	return nil
 }
 
-func (Base) Checkout(name string) error {
+func (Base) Checkout(name string, isNew bool) error {
 	oid, err := base.GetOid(name)
-
-	if err != nil {
-		if _, ok := err.(*NoOIDFoundError); !ok {
+	if _, ok := err.(RefNotFoundError); err != nil {
+		if !ok || (ok && !isNew) {
 			return err
 		}
 	}
@@ -567,6 +558,11 @@ func (Base) CreateTag(name, oid string) error {
 }
 
 func (Base) CreateBranch(name, baseName string) error {
+	refPath := filepath.Join(GOGIT_DIR, "refs/heads", name)
+	if _, err := os.Stat(refPath); err == nil {
+		return fmt.Errorf("branch already exists with name \"%s\"", name)
+	}
+
 	oid, err := base.GetOid(baseName)
 	if err != nil {
 		return err

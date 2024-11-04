@@ -23,31 +23,28 @@ type Command struct {
 	commandFlags    map[string]bool // Key: flag name, Value: required
 }
 
-func Exec(cmd Command, args CLIArgs, flags CLIFlags) {
+func Exec(cmd Command, args CLIArgs, flags CLIFlags) error {
 	if len(args) < cmd.requiredNumArgs {
-		fmt.Printf(
-			"not enough specified args, expected %d and received %d\n", cmd.requiredNumArgs, len(args))
-		return
+		return GogitError{message: fmt.Sprintf("not enough specified args, expected %d and received %d\n", cmd.requiredNumArgs, len(args))}
 	}
 
 	for flagName, required := range cmd.commandFlags {
 		if _, ok := flags[flagName]; !ok && required {
-			fmt.Printf("required flag: %s\n", flagName)
-			return
+			return GogitError{message: fmt.Sprintf("missing required flag \"%s\"", flagName)}
 		}
 	}
 
 	for flagName := range flags {
 		if _, ok := cmd.commandFlags[flagName]; !ok {
-			fmt.Printf("unknown flag: %s\n", flagName)
-			return
+			return GogitError{message: fmt.Sprintf("unknown flag \"%s\"", flagName)}
 		}
 	}
 
 	if err := cmd.fn(args, flags); err != nil {
-		fmt.Printf("error: %s\n", err)
-		return
+		return GogitError{message: err.Error()}
 	}
+
+	return nil
 }
 
 func (CLI) Init(_ CLIArgs, _ CLIFlags) error {
@@ -116,7 +113,7 @@ func (CLI) Checkout(args CLIArgs, flags CLIFlags) error {
 		return nil
 	}
 
-	if err := base.Checkout(branchName); err != nil {
+	if err := base.Checkout(branchName, branchFlagExists); err != nil {
 		return err
 	}
 
@@ -421,12 +418,11 @@ func parseFlags(flags CLIFlags, args CLIArgs, flagIdx int) (CLIFlags, CLIArgs, e
 				f[name] = *v
 			}
 		case *bool:
-			flags[name] = *v
 			if *v {
 				f[name] = *v
 			}
 		default:
-			return CLIFlags{}, CLIArgs{}, fmt.Errorf("error: unknown flag type %s", v)
+			return CLIFlags{}, CLIArgs{}, fmt.Errorf("fatal: unknown flag type %T", v)
 		}
 	}
 
@@ -438,8 +434,8 @@ func main() {
 	input := os.Args
 
 	if len(input) < 2 {
-		fmt.Println("must specify a command")
-		return
+		fmt.Println(GogitError{message: "must specify a command"})
+		os.Exit(1)
 	}
 
 	cmd, args := input[1], input[2:]
@@ -488,9 +484,13 @@ func main() {
 	}
 
 	if fn, ok := commands[cmd]; ok {
-		Exec(fn, args, flags)
+		err := Exec(fn, args, flags)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
 	} else {
-		fmt.Printf("unknown command: %s\n", cmd)
-		return
+		fmt.Println(GogitError{message: fmt.Sprintf("unknown command \"%s\"", cmd)})
+		os.Exit(1)
 	}
 }

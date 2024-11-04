@@ -61,6 +61,15 @@ type RefValue struct {
 	Value    string
 }
 
+/* Error Types */
+type GogitError struct {
+	message string
+}
+
+func (err GogitError) Error() string {
+	return fmt.Sprintf("error: %s", err.message)
+}
+
 type ObjectTypeError struct {
 	received string
 	expected string
@@ -72,4 +81,12 @@ func (err ObjectTypeError) Error() string {
 		strings.ToUpper(err.received),
 		strings.ToUpper(err.expected),
 	)
+}
+
+type RefNotFoundError struct {
+	ref string
+}
+
+func (err RefNotFoundError) Error() string {
+	return fmt.Sprintf("no ref found with name \"%s\"", err.ref)
 }
