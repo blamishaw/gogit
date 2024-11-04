@@ -18,14 +18,6 @@ type Base struct{}
 // Namespacing
 var base Base
 
-type NoOIDFoundError struct {
-	message string
-}
-
-func (err *NoOIDFoundError) Error() string {
-	return err.message
-}
-
 func (Base) isBranch(name string) bool {
 	ref, err := data.GetRef(filepath.Join("refs/heads", name), true)
 	return err == nil && ref.Value != ""
@@ -41,14 +33,19 @@ func (Base) isAncestorOf(oid1, oid2 string) bool {
 	return false
 }
 
-func (Base) iterBranches() iter.Seq2[string, *RefValue] {
+func (Base) iterBranches() (iter.Seq2[string, *RefValue], error) {
+	refIter, err := data.iterRefs("heads", true)
+	if err != nil {
+		return nil, err
+	}
+
 	return func(yield func(string, *RefValue) bool) {
-		for refName, ref := range data.iterRefs("heads", true) {
+		for refName, ref := range refIter {
 			if !yield(filepath.Base(refName), ref) {
 				return
 			}
 		}
-	}
+	}, nil
 }
 
 func (Base) iterCommitsAndParents(oids []string) iter.Seq[string] {
@@ -82,16 +79,20 @@ func (Base) iterCommitsAndParents(oids []string) iter.Seq[string] {
 	}
 }
 
-func (Base) iterTreeEntries(oid string) iter.Seq2[int, TreeEntry] {
+func (Base) iterTreeEntries(oid string) (iter.Seq2[int, TreeEntry], error) {
+	if oid == "" {
+		return nil, fmt.Errorf("empty oid")
+	}
+	tree, t, err := data.GetObject(oid)
+	if err != nil {
+		return nil, err
+	}
+
+	if t != TREE {
+		return nil, ObjectTypeError{received: t, expected: TREE}
+	}
+
 	return func(yield func(int, TreeEntry) bool) {
-		if oid == "" {
-			return
-		}
-		tree, err := data.GetObject(oid, TREE)
-		if err != nil {
-			fmt.Printf("error iterating tree entries: %s", err)
-			return
-		}
 		for i, entry := range strings.Split(string(tree), "\n") {
 			fields := strings.Split(entry, " ")
 			if len(fields) < 3 {
@@ -102,7 +103,7 @@ func (Base) iterTreeEntries(oid string) iter.Seq2[int, TreeEntry] {
 				return
 			}
 		}
-	}
+	}, nil
 }
 
 // MapObjectsInCommits takes a list of commit OIDs, a path, and a function
@@ -137,7 +138,12 @@ func (Base) mapObjectsInTree(treeOID string, visited *ds.Set[string], mapFn func
 		return err
 	}
 
-	for _, node := range base.iterTreeEntries(treeOID) {
+	treeEntries, err := base.iterTreeEntries(treeOID)
+	if err != nil {
+		return err
+	}
+
+	for _, node := range treeEntries {
 		if visited.Includes(node.Oid) {
 			continue
 		}
@@ -208,10 +214,14 @@ func (Base) checkoutIndex(index map[string]string) error {
 			return fmt.Errorf("empty oid: %v", index)
 		}
 
-		obj, err := data.GetObject(oid, BLOB)
+		obj, t, err := data.GetObject(oid)
 		if err != nil {
 			return err
 		}
+		if t != BLOB {
+			return ObjectTypeError{received: t, expected: BLOB}
+		}
+
 		if err := os.WriteFile(path, obj, FP); err != nil {
 			return err
 		}
@@ -232,10 +242,15 @@ func (Base) printStructuredIndex(m map[string]interface{}, level int) {
 
 // GetCommit takes an OID and returns a pointer to a CommitObject
 func (Base) GetCommit(oid string) (*CommitObject, error) {
-	buf, err := data.GetObject(oid, COMMIT)
+	buf, t, err := data.GetObject(oid)
 	if err != nil {
 		return nil, err
 	}
+
+	if t != COMMIT {
+		return nil, ObjectTypeError{received: t, expected: COMMIT}
+	}
+
 	var c CommitObject
 	fields := strings.Split(string(buf), "\n")
 	var parents []string
@@ -292,7 +307,7 @@ func (Base) GetOid(name string) (string, error) {
 	if data.isValidSHA1(name) {
 		return name, nil
 	}
-	return "", &NoOIDFoundError{fmt.Sprintf("no oid found with ref: %s", name)}
+	return "", RefNotFoundError{ref: name}
 }
 
 // Init initializes the gogit repository, and points HEAD toward a new branch "main"
@@ -307,7 +322,11 @@ func (Base) ReadTree(treeOid string, updateWorkingDir bool) error {
 	return data.WithIndex(
 		func(_ map[string]string) (map[string]string, error) {
 			index := map[string]string{}
-			for path, oid := range base.GetTree(treeOid, ".") {
+			tree, err := base.GetTree(treeOid, ".")
+			if err != nil {
+				return nil, err
+			}
+			for path, oid := range tree {
 				index[path] = oid
 			}
 
@@ -350,21 +369,30 @@ func (Base) WriteTree(dir string) (string, error) {
 	return writeTreeRecursive(index)
 }
 
-func (Base) GetTree(oid, basePath string) Tree {
+func (Base) GetTree(oid, basePath string) (Tree, error) {
 	result := make(Tree)
-	for _, entry := range base.iterTreeEntries(oid) {
+
+	treeEntriesIter, err := base.iterTreeEntries(oid)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range treeEntriesIter {
 		path := filepath.Join(basePath, entry.Name)
 		switch entry.Type {
 		case BLOB:
 			result[path] = entry.Oid
 		case TREE:
-			maps.Copy(result, base.GetTree(entry.Oid, fmt.Sprintf("%s/", path)))
+			tree, err := base.GetTree(entry.Oid, fmt.Sprintf("%s/", path))
+			if err != nil {
+				return nil, err
+			}
+			maps.Copy(result, tree)
 		default:
-			fmt.Printf("error: unknown tree entry %s", entry.Type)
-			return nil
+			return nil, fmt.Errorf("unknown tree entry %s", entry.Type)
 		}
 	}
-	return result
+	return result, nil
 }
 
 func (Base) GetIndexTree() (Tree, error) {
@@ -408,7 +436,22 @@ func (Base) ReadTreeMerged(
 ) error {
 	return data.WithIndex(
 		func(index map[string]string) (map[string]string, error) {
-			mergedTree, err := diff.MergeTrees(base.GetTree(baseTreeOid, ""), base.GetTree(headTreeOid, ""), base.GetTree(mergeTreeOid, ""))
+			baseTree, err := base.GetTree(baseTreeOid, "")
+			if err != nil {
+				return nil, err
+			}
+
+			headTree, err := base.GetTree(headTreeOid, "")
+			if err != nil {
+				return nil, err
+			}
+
+			mergeTree, err := base.GetTree(mergeTreeOid, "")
+			if err != nil {
+				return nil, err
+			}
+
+			mergedTree, err := diff.MergeTrees(baseTree, headTree, mergeTree)
 			if err != nil {
 				return nil, err
 			}
@@ -450,7 +493,12 @@ func (Base) Commit(message string, timestamp time.Time) (string, error) {
 
 func (Base) Log(oid string) error {
 	refs := make(map[string][]string)
-	for refName, ref := range data.iterRefs("", true) {
+
+	refIter, err := data.iterRefs("", true)
+	if err != nil {
+		return err
+	}
+	for refName, ref := range refIter {
 		refs[ref.Value] = append(refs[ref.Value], refName)
 	}
 
@@ -465,11 +513,10 @@ func (Base) Log(oid string) error {
 	return nil
 }
 
-func (Base) Checkout(name string) error {
+func (Base) Checkout(name string, isNew bool) error {
 	oid, err := base.GetOid(name)
-
-	if err != nil {
-		if _, ok := err.(*NoOIDFoundError); !ok {
+	if _, ok := err.(RefNotFoundError); err != nil {
+		if !ok || (ok && !isNew) {
 			return err
 		}
 	}
@@ -511,6 +558,11 @@ func (Base) CreateTag(name, oid string) error {
 }
 
 func (Base) CreateBranch(name, baseName string) error {
+	refPath := filepath.Join(GOGIT_DIR, "refs/heads", name)
+	if _, err := os.Stat(refPath); err == nil {
+		return fmt.Errorf("branch already exists with name \"%s\"", name)
+	}
+
 	oid, err := base.GetOid(baseName)
 	if err != nil {
 		return err
@@ -631,7 +683,10 @@ func (Base) Rebase(oid string) error {
 			return err
 		}
 	}
-	return nil
+
+	// Garbage collect unreachable old commits
+	_, err = base.GC()
+	return err
 }
 
 func (Base) Add(filenames ...string) error {
@@ -702,7 +757,12 @@ func (Base) GC() (int, error) {
 	reachable := ds.NewSet([]string{})
 
 	// Iterate over all refs
-	for _, ref := range data.iterRefs("heads", true) {
+	refIter, err := data.iterRefs("heads", true)
+	if err != nil {
+		return 0, err
+	}
+
+	for _, ref := range refIter {
 		// Get all commits reachable from ref
 		commitOIDs := []string{}
 		for commitOID := range base.iterCommitsAndParents([]string{ref.Value}) {
@@ -746,7 +806,12 @@ func (Base) K() error {
 	dot := "digraph commits {\n"
 	oids := ds.NewSet([]string{})
 
-	for refName, ref := range data.iterRefs("", false) {
+	refIter, err := data.iterRefs("", false)
+	if err != nil {
+		return err
+	}
+
+	for refName, ref := range refIter {
 		dot += fmt.Sprintf("\"%s\" [shape=note]\n", refName)
 		dot += fmt.Sprintf("\"%s\" -> \"%s\"\n", refName, ref.Value)
 		if !ref.Symbolic {

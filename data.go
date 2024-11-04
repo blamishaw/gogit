@@ -69,26 +69,26 @@ func (Data) emptyCurrentDir() error {
 }
 
 // Iterates over all refs and returns a ref name, and pointer to a RefValue object
-func (Data) iterRefs(prefix string, deref bool) iter.Seq2[string, *RefValue] {
-	return func(yield func(string, *RefValue) bool) {
-		refNames := []string{HEAD, MERGE_HEAD}
-		refDir := filepath.Join("refs", prefix)
-		err := filepath.WalkDir(filepath.Join(GOGIT_ROOT, refDir), func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if !d.IsDir() {
-				relP, err := filepath.Rel(GOGIT_ROOT, path)
-				refNames = append(refNames, relP)
-				return err
-			}
-			return nil
-		})
-
+func (Data) iterRefs(prefix string, deref bool) (iter.Seq2[string, *RefValue], error) {
+	refNames := []string{HEAD, MERGE_HEAD}
+	refDir := filepath.Join("refs", prefix)
+	err := filepath.WalkDir(filepath.Join(GOGIT_ROOT, refDir), func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			panic(err)
+			return err
 		}
+		if !d.IsDir() {
+			relP, err := filepath.Rel(GOGIT_ROOT, path)
+			refNames = append(refNames, relP)
+			return err
+		}
+		return nil
+	})
 
+	if err != nil {
+		return nil, err
+	}
+
+	return func(yield func(string, *RefValue) bool) {
 		for _, refName := range refNames {
 			if !strings.HasPrefix(refName, refDir) {
 				continue
@@ -101,7 +101,7 @@ func (Data) iterRefs(prefix string, deref bool) iter.Seq2[string, *RefValue] {
 				return
 			}
 		}
-	}
+	}, nil
 }
 
 func (Data) Init() error {
@@ -200,11 +200,11 @@ func (Data) HashObject(data []byte, _type string) (string, error) {
 	return oid, nil
 }
 
-// Should we just read the type if the target type isn't provided?
-func (Data) GetObject(oid, targetType string) ([]byte, error) {
+// GetObject takes an oid and returns the object content and type
+func (Data) GetObject(oid string) ([]byte, string, error) {
 	data, err := os.ReadFile(filepath.Join(GOGIT_ROOT, "objects", oid))
 	if err != nil {
-		return []byte{}, err
+		return []byte{}, "", err
 	}
 
 	// Zlib uncompress buffer
@@ -213,7 +213,7 @@ func (Data) GetObject(oid, targetType string) ([]byte, error) {
 		compressedBuf := bytes.NewBuffer(data)
 		r, err := zlib.NewReader(compressedBuf)
 		if err != nil {
-			return []byte{}, err
+			return []byte{}, "", err
 		}
 		_, _ = io.Copy(&b, r)
 		r.Close()
@@ -223,10 +223,7 @@ func (Data) GetObject(oid, targetType string) ([]byte, error) {
 
 	buf := b.Bytes()
 	typeIdx := bytes.IndexByte(buf, 0)
-	if t := string(buf[:typeIdx]); targetType != t {
-		return []byte{}, fmt.Errorf("type %s is not of target type %s", t, targetType)
-	}
-	return buf[typeIdx+1:], nil
+	return buf[typeIdx+1:], string(buf[:typeIdx]), nil
 }
 
 func (Data) DeleteObject(oid string) error {
@@ -304,9 +301,12 @@ func (Data) writeTempBlob(blobOid string, store *[]string) error {
 	defer f.Close()
 
 	if blobOid != "" {
-		blob, err := data.GetObject(blobOid, BLOB)
+		blob, t, err := data.GetObject(blobOid)
 		if err != nil {
 			return err
+		}
+		if t != BLOB {
+			return ObjectTypeError{received: t, expected: BLOB}
 		}
 		if _, err = f.Write(blob); err != nil {
 			return err

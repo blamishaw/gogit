@@ -58,26 +58,26 @@ func (Diff) getDiffCmdAndArgs(action int, path string, files []string) (string, 
 // compareTrees is an iterator that takes a variadic number of Tree objects and returns a filename
 // and the associated oids for that file in the provided Trees
 func (Diff) compareTrees(trees ...Tree) iter.Seq2[string, []string] {
-	return func(yield func(string, []string) bool) {
-		entries := make(map[string][]string)
-		paths := ds.NewSet([]string{})
+	entries := make(map[string][]string)
+	paths := ds.NewSet([]string{})
 
-		for i, tree := range trees {
-			for path, oid := range tree {
-				paths.Add(path)
-				if len(entries[path]) == 0 {
-					entries[path] = make([]string, len(trees))
-				}
-				entries[path][i] = oid
+	for i, tree := range trees {
+		for path, oid := range tree {
+			paths.Add(path)
+			if len(entries[path]) == 0 {
+				entries[path] = make([]string, len(trees))
 			}
+			entries[path][i] = oid
 		}
+	}
 
-		arr := paths.ToArray()
-		// Sort paths to deterministically yield files in alphabetical order
-		slices.SortFunc(arr, func(a, b string) int {
-			return strings.Compare(strings.ToLower(a), strings.ToLower(b))
-		})
+	arr := paths.ToArray()
+	// Sort paths to deterministically yield files in alphabetical order
+	slices.SortFunc(arr, func(a, b string) int {
+		return strings.Compare(strings.ToLower(a), strings.ToLower(b))
+	})
 
+	return func(yield func(string, []string) bool) {
 		for _, path := range arr {
 			if !yield(path, entries[path]) {
 				return

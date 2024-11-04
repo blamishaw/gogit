@@ -117,8 +117,14 @@ func (Remote) Fetch(remotePath string) error {
 
 func (Remote) getRemoteRefs(remotePath, prefix string) (map[string]string, error) {
 	refMap := make(map[string]string)
+
 	err := data.ChangeRootDir(remotePath, func() error {
-		for refName, ref := range data.iterRefs(prefix, true) {
+		refIter, err := data.iterRefs(prefix, true)
+		if err != nil {
+			return err
+		}
+
+		for refName, ref := range refIter {
 			refMap[refName] = ref.Value
 		}
 		return nil

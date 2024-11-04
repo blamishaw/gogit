@@ -23,31 +23,28 @@ type Command struct {
 	commandFlags    map[string]bool // Key: flag name, Value: required
 }
 
-func Exec(cmd Command, args CLIArgs, flags CLIFlags) {
+func Exec(cmd Command, args CLIArgs, flags CLIFlags) error {
 	if len(args) < cmd.requiredNumArgs {
-		fmt.Printf(
-			"not enough specified args, expected %d and received %d\n", cmd.requiredNumArgs, len(args))
-		return
+		return GogitError{message: fmt.Sprintf("not enough specified args, expected %d and received %d\n", cmd.requiredNumArgs, len(args))}
 	}
 
 	for flagName, required := range cmd.commandFlags {
 		if _, ok := flags[flagName]; !ok && required {
-			fmt.Printf("required flag: %s\n", flagName)
-			return
+			return GogitError{message: fmt.Sprintf("missing required flag \"%s\"", flagName)}
 		}
 	}
 
 	for flagName := range flags {
 		if _, ok := cmd.commandFlags[flagName]; !ok {
-			fmt.Printf("unknown flag: %s\n", flagName)
-			return
+			return GogitError{message: fmt.Sprintf("unknown flag \"%s\"", flagName)}
 		}
 	}
 
 	if err := cmd.fn(args, flags); err != nil {
-		fmt.Printf("error: %s\n", err)
-		return
+		return GogitError{message: err.Error()}
 	}
+
+	return nil
 }
 
 func (CLI) Init(_ CLIArgs, _ CLIFlags) error {
@@ -59,8 +56,8 @@ func (CLI) Init(_ CLIArgs, _ CLIFlags) error {
 }
 
 func (CLI) CatFile(args CLIArgs, _ CLIFlags) error {
-	fp, t := args[0], args[1]
-	buf, err := data.GetObject(fp, t)
+	fp := args[0]
+	buf, _, err := data.GetObject(fp)
 	if err != nil {
 		return err
 	}
@@ -116,7 +113,7 @@ func (CLI) Checkout(args CLIArgs, flags CLIFlags) error {
 		return nil
 	}
 
-	if err := base.Checkout(branchName); err != nil {
+	if err := base.Checkout(branchName, branchFlagExists); err != nil {
 		return err
 	}
 
@@ -143,7 +140,13 @@ func (CLI) Branch(args CLIArgs, _ CLIFlags) error {
 		if err != nil {
 			return err
 		}
-		for branchName, _ := range base.iterBranches() {
+
+		branchIter, err := base.iterBranches()
+		if err != nil {
+			return err
+		}
+
+		for branchName, _ := range branchIter {
 			if branchName == currentBranch {
 				fmt.Printf("* %s\n", branchName)
 			} else {
@@ -206,7 +209,13 @@ func (CLI) Status(_ CLIArgs, _ CLIFlags) error {
 	}
 
 	fmt.Printf("\nChanges to be commited:\n")
-	for path, action := range diff.iterChangedFiles(base.GetTree(headTreeOID, ""), indexTree) {
+
+	headTree, err := base.GetTree(headTreeOID, "")
+	if err != nil {
+		return err
+	}
+
+	for path, action := range diff.iterChangedFiles(headTree, indexTree) {
 		diff.PrettyPrint(fmt.Sprintf("%s: %s", action, path))
 	}
 
@@ -242,7 +251,18 @@ func (CLI) Show(args CLIArgs, _ CLIFlags) error {
 		parentTreeOid = parentCommit.TreeOid
 	}
 	base.printCommit(oid, *c, []string{})
-	out, err := diff.DiffTrees(base.GetTree(parentTreeOid, ""), base.GetTree(c.TreeOid, ""))
+
+	parentTree, err := base.GetTree(parentTreeOid, "")
+	if err != nil {
+		return err
+	}
+
+	tree, err := base.GetTree(c.TreeOid, "")
+	if err != nil {
+		return err
+	}
+
+	out, err := diff.DiffTrees(parentTree, tree)
 	if err != nil {
 		return err
 	}
@@ -262,7 +282,11 @@ func (CLI) Diff(args CLIArgs, flags CLIFlags) error {
 		if err != nil {
 			return err
 		}
-		treeFrom = base.GetTree(commit.TreeOid, "")
+
+		treeFrom, err = base.GetTree(commit.TreeOid, "")
+		if err != nil {
+			return err
+		}
 	}
 
 	var err error
@@ -282,7 +306,10 @@ func (CLI) Diff(args CLIArgs, flags CLIFlags) error {
 				if err != nil {
 					return err
 				}
-				treeFrom = base.GetTree(oid, c.TreeOid)
+				treeFrom, err = base.GetTree(oid, c.TreeOid)
+				if err != nil {
+					return err
+				}
 			}
 
 		}
@@ -376,12 +403,39 @@ func (CLI) GC(_ CLIArgs, _ CLIFlags) error {
 	return nil
 }
 
+func parseFlags(flags CLIFlags, args CLIArgs, flagIdx int) (CLIFlags, CLIArgs, error) {
+	if flagIdx < 0 {
+		return CLIFlags{}, args, nil
+	}
+
+	_ = flag.CommandLine.Parse(args[flagIdx:])
+
+	f := CLIFlags{}
+	for name, value := range flags {
+		switch v := value.(type) {
+		case *string:
+			if len(*v) > 0 {
+				f[name] = *v
+			}
+		case *bool:
+			if *v {
+				f[name] = *v
+			}
+		default:
+			return CLIFlags{}, CLIArgs{}, fmt.Errorf("fatal: unknown flag type %T", v)
+		}
+	}
+
+	return f, args[:flagIdx], nil
+}
+
 func main() {
+	var err error
 	input := os.Args
 
 	if len(input) < 2 {
-		fmt.Println("must specify a command")
-		return
+		fmt.Println(GogitError{message: "must specify a command"})
+		os.Exit(1)
 	}
 
 	cmd, args := input[1], input[2:]
@@ -394,31 +448,22 @@ func main() {
 		}
 	}
 
-	flags := make(CLIFlags)
-	messageFlag := flag.String("m", "", "commit message")
-	branchFlag := flag.String("b", "", "branch name")
-	cachedFlag := flag.Bool("cached", false, "diff using index")
-	if firstArgWithDash >= 0 {
-		_ = flag.CommandLine.Parse(args[firstArgWithDash:])
-		if len(*messageFlag) > 0 {
-			flags["message"] = *messageFlag
-		}
+	flags := CLIFlags{
+		"message": flag.String("m", "", "commit message"),
+		"branch":  flag.String("b", "", "branch name"),
+		"cached":  flag.Bool("cached", false, "diff using index"),
+	}
 
-		if len(*branchFlag) > 0 {
-			flags["branch"] = *branchFlag
-		}
-
-		if *cachedFlag {
-			flags["cached"] = *cachedFlag
-		}
-
-		args = args[:firstArgWithDash]
+	flags, args, err = parseFlags(flags, args, firstArgWithDash)
+	if err != nil {
+		fmt.Println(err)
+		return
 	}
 
 	var none map[string]bool
 	commands := map[string]Command{
 		"init":       {cli.Init, 0, none},
-		"cat-file":   {cli.CatFile, 2, none},
+		"cat-file":   {cli.CatFile, 1, none},
 		"commit":     {cli.Commit, 0, map[string]bool{"message": true}},
 		"log":        {cli.Log, 0, none},
 		"checkout":   {cli.Checkout, 0, map[string]bool{"branch": false}},
@@ -439,9 +484,13 @@ func main() {
 	}
 
 	if fn, ok := commands[cmd]; ok {
-		Exec(fn, args, flags)
+		err := Exec(fn, args, flags)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
 	} else {
-		fmt.Printf("unknown command: %s\n", cmd)
-		return
+		fmt.Println(GogitError{message: fmt.Sprintf("unknown command \"%s\"", cmd)})
+		os.Exit(1)
 	}
 }
